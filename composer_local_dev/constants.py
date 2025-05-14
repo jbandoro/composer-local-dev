@@ -46,21 +46,19 @@ class DatabaseEngine:
 
 COMPOSER_VERSIONING_DOCS_LINK = "https://cloud.google.com/composer/docs/concepts/versioning/composer-versions"
 COMPOSER_FAQ_MOUNTING_LINK = "https://cloud.google.com/composer/docs/composer-2/run-local-airflow-environments#troubleshooting-homebrew"
-IMAGE_VERSION_PATTERN = (
-    r"composer-([1-9]+\.[0-9]+\.[0-9]+)-airflow-([1-9]+[\.|-][0-9]+[\.|-][0-9]+)"
-)
+IMAGE_VERSION_PATTERN = r"composer-([1-9][0-9]*(?:\.[0-9]+){0,2})-airflow-([1-9][0-9]*(?:[\.|-][0-9]+){2})(?:-build\.[0-9]+)?"
 ARTIFACT_REGISTRY_IMAGE_URL = (
     "projects/cloud-airflow-releaser/"
     "locations/us/repositories/"
     "airflow-worker-scheduler-{airflow_v}/packages/"
     "airflow-worker-scheduler-{airflow_v}/tags/"
-    "composer-{composer_v}-airflow-{airflow_v}"
+    "{image_tag}"
 )
 DOCKER_REGISTRY_IMAGE_TAG = (
     "us-docker.pkg.dev/cloud-airflow-releaser/"
     "airflow-worker-scheduler-{airflow_v}/"
     "airflow-worker-scheduler-{airflow_v}:"
-    "composer-{composer_v}-airflow-{airflow_v}"
+    "{image_tag}"
 )
 
 AIRFLOW_HOME = "/home/airflow"
@@ -245,7 +243,10 @@ NOT_MODIFIABLE_ENVIRONMENT_VARIABLES = {
 }
 # The following environment variables can only be used with the given possible values
 STRICT_ENVIRONMENT_VARIABLES = {
-    "AIRFLOW__CORE__EXECUTOR": ["LocalExecutor", "SequentialExecutor",],
+    "AIRFLOW__CORE__EXECUTOR": [
+        "LocalExecutor",
+        "SequentialExecutor",
+    ],
 }
 LIST_COMMAND_EPILOG = (
     "\nRun describe command with the environment name to see the detailed "

@@ -1,5 +1,11 @@
 # Composer Local Development CLI tool
 
+| :warning: WARNING           |
+|:----------------------------|
+This fork was only created to support Composer 3 images until they are
+officially supported for local development and extra volume mounts specified
+in a configuration file. This fork does not work with Composer 2 images.
+
 [Google Cloud Privacy Notice](https://cloud.google.com/terms/cloud-privacy-notice)
 
 ## Overview

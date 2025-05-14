@@ -45,12 +45,13 @@ def timeout_occurred(start_time):
 
 
 def get_image_mounts(
-        env_path: pathlib.Path,
-        dags_path: str,
-        gcloud_config_path: str,
-        kube_config_path: Optional[str],
-        requirements: pathlib.Path,
-        database_mounts: Dict[pathlib.Path, str]
+    env_path: pathlib.Path,
+    dags_path: str,
+    gcloud_config_path: str,
+    kube_config_path: Optional[str],
+    requirements: pathlib.Path,
+    database_mounts: Dict[pathlib.Path, str],
+    extra_mounts: Optional[Dict[pathlib.Path, str]] = None,
 ) -> List[docker.types.Mount]:
     """
     Return list of docker volumes to be mounted inside container.
@@ -62,13 +63,17 @@ def get_image_mounts(
      - environment airflow sqlite db file location
      - database_mounts which contains the path for database mounts
     """
+    if not extra_mounts:
+        extra_mounts = {}
     mount_paths = {
         requirements: "composer_requirements.txt",
         dags_path: "gcs/dags/",
         env_path / "plugins": "gcs/plugins/",
         env_path / "data": "gcs/data/",
         gcloud_config_path: ".config/gcloud",
+        # "/Users/justinbandoro/Documents/repos/airstream/packages/airstream_core": "airstream_core/",
         **database_mounts,
+        **extra_mounts,
     }
     # Add kube_config_path only if it's provided
     if kube_config_path:
@@ -84,7 +89,9 @@ def get_image_mounts(
 
 
 def get_default_environment_variables(
-        dag_dir_list_interval: int, project_id: str, default_db_variables: Dict[str, str]
+    dag_dir_list_interval: int,
+    project_id: str,
+    default_db_variables: Dict[str, str],
 ) -> Dict:
     """Return environment variables that will be set inside container."""
     return {
@@ -104,15 +111,15 @@ def get_default_environment_variables(
         "COMPOSER_HOST_USER_ID": f"{os.getuid() if platform.system() != 'Windows' else ''}",
         "AIRFLOW_HOME": "/home/airflow/airflow",
         "AIRFLOW_CONN_GOOGLE_CLOUD_DEFAULT": f"google-cloud-platform://?"
-                                             f"extra__google_cloud_platform__project={project_id}&"
-                                             f"extra__google_cloud_platform__scope="
-                                             f"https://www.googleapis.com/auth/cloud-platform",
+        f"extra__google_cloud_platform__project={project_id}&"
+        f"extra__google_cloud_platform__scope="
+        f"https://www.googleapis.com/auth/cloud-platform",
         **default_db_variables,
     }
 
 
 def parse_env_variable(
-        line: str, env_file_path: pathlib.Path
+    line: str, env_file_path: pathlib.Path
 ) -> Tuple[str, str]:
     """Parse line in format of key=value and return (key, value) tuple."""
     try:
@@ -197,7 +204,7 @@ def filter_not_modifiable_env_vars(env_vars: Dict) -> Dict:
 
 
 def get_software_config_from_environment(
-        project: str, location: str, environment: str
+    project: str, location: str, environment: str
 ):
     """Get software configuration from the Composer environment.
 
@@ -263,10 +270,12 @@ def assert_image_exists(image_version: str):
         image_version: Image version in format of 'composer-x.y.z-airflow-a.b.c'
     """
     airflow_v, composer_v = utils.get_airflow_composer_versions(image_version)
-    image_tag = utils.get_image_version_tag(airflow_v, composer_v)
+    image_tag = (
+        image_version  # utils.get_image_version_tag(airflow_v, composer_v)
+    )
     LOG.info("Asserting that %s composer image version exists", image_tag)
     image_url = constants.ARTIFACT_REGISTRY_IMAGE_URL.format(
-        airflow_v=airflow_v, composer_v=composer_v
+        airflow_v=airflow_v, image_tag=image_tag
     )
     client = artifactregistry_v1.ArtifactRegistryClient()
     request = artifactregistry_v1.GetTagRequest(name=image_url)
@@ -282,8 +291,8 @@ def assert_image_exists(image_version: str):
             )
         )
     except (
-            auth_exception.GoogleAuthError,
-            api_exception.GoogleAPIError,
+        auth_exception.GoogleAuthError,
+        api_exception.GoogleAPIError,
     ) as err:
         raise errors.InvalidAuthError(err)
 
@@ -301,16 +310,16 @@ def get_docker_image_tag_from_image_version(image_version: str) -> str:
     """
     airflow_v, composer_v = utils.get_airflow_composer_versions(image_version)
     return constants.DOCKER_REGISTRY_IMAGE_TAG.format(
-        airflow_v=airflow_v, composer_v=composer_v
+        airflow_v=airflow_v, image_tag=image_version
     )
 
 
 def is_mount_permission_error(error: docker_errors.APIError) -> bool:
     """Checks if error is possibly a Docker mount permission error."""
     return (
-            error.is_client_error()
-            and error.response.status_code == constants.BAD_REQUEST_ERROR_CODE
-            and "invalid mount config" in error.explanation
+        error.is_client_error()
+        and error.response.status_code == constants.BAD_REQUEST_ERROR_CODE
+        and "invalid mount config" in error.explanation
     )
 
 
@@ -359,7 +368,7 @@ def get_image_version(env):
 
 
 def get_environments_status(
-        envs: List[pathlib.Path],
+    envs: List[pathlib.Path],
 ) -> List[EnvironmentStatus]:
     """Get list of environment statuses."""
     environments_status = []
@@ -395,6 +404,7 @@ class EnvironmentConfig:
             else self.parse_int_param("port", allowed_range=(0, 65536))
         )
         self.database_engine = self.get_str_param("database_engine")
+        self.extra_mounts = self.config.get("extra_mounts", dict())
 
     def load_configuration_from_file(self) -> Dict:
         """
@@ -428,9 +438,9 @@ class EnvironmentConfig:
             raise errors.MissingRequiredParameterError(name) from None
 
     def parse_int_param(
-            self,
-            name: str,
-            allowed_range: Optional[Tuple[int, int]] = None,
+        self,
+        name: str,
+        allowed_range: Optional[Tuple[int, int]] = None,
     ):
         """
         Get parameter from the config and convert it to integer.
@@ -453,7 +463,7 @@ class EnvironmentConfig:
         if allowed_range is None:
             return value
         if value < allowed_range[0] or (
-                len(allowed_range) > 1 and value > allowed_range[1]
+            len(allowed_range) > 1 and value > allowed_range[1]
         ):
             raise errors.FailedToParseConfigParamIntRangeError(
                 name, value, allowed_range
@@ -463,22 +473,25 @@ class EnvironmentConfig:
 
 class Environment:
     def __init__(
-            self,
-            env_dir_path: pathlib.Path,
-            project_id: str,
-            image_version: str,
-            location: str,
-            dags_path: Optional[str],
-            dag_dir_list_interval: int = 10,
-            database_engine: str = constants.DatabaseEngine.sqlite3,
-            port: Optional[int] = None,
-            pypi_packages: Optional[Dict] = None,
-            environment_vars: Optional[Dict] = None,
+        self,
+        env_dir_path: pathlib.Path,
+        project_id: str,
+        image_version: str,
+        location: str,
+        dags_path: Optional[str],
+        dag_dir_list_interval: int = 10,
+        database_engine: str = constants.DatabaseEngine.sqlite3,
+        port: Optional[int] = None,
+        pypi_packages: Optional[Dict] = None,
+        environment_vars: Optional[Dict] = None,
+        extra_mounts: Optional[Dict] = None,
     ):
         self.name = env_dir_path.name
         self.container_name = f"{constants.CONTAINER_NAME}-{self.name}"
         self.db_container_name = f"{constants.DB_CONTAINER_NAME}-{self.name}"
-        self.docker_network_name = f"{constants.DOCKER_NETWORK_NAME}-{self.name}"
+        self.docker_network_name = (
+            f"{constants.DOCKER_NETWORK_NAME}-{self.name}"
+        )
         self.env_dir_path = env_dir_path
         self.airflow_db = self.env_dir_path / "airflow.db"
         self.entrypoint_file = DOCKER_FILES / "entrypoint.sh"
@@ -487,13 +500,15 @@ class Environment:
         self.project_id = project_id
         self.image_version = image_version
         self.image_tag = get_docker_image_tag_from_image_version(image_version)
-        self.db_image_tag = 'postgres:14-alpine'
+        self.db_image_tag = "postgres:14-alpine"
         self.airflow_db_folder = self.env_dir_path / "postgresql_data"
         self.location = location
         self.dags_path = files.resolve_dags_path(dags_path, env_dir_path)
         self.dag_dir_list_interval = dag_dir_list_interval
         self.database_engine = database_engine
-        self.is_database_sqlite3 = self.database_engine == constants.DatabaseEngine.sqlite3
+        self.is_database_sqlite3 = (
+            self.database_engine == constants.DatabaseEngine.sqlite3
+        )
         self.port: int = port if port is not None else 8080
         self.pypi_packages = (
             pypi_packages if pypi_packages is not None else dict()
@@ -501,6 +516,7 @@ class Environment:
         self.environment_vars = (
             environment_vars if environment_vars is not None else dict()
         )
+        self.extra_mounts = extra_mounts
         self.docker_client = self.get_client()
 
     def get_client(self):
@@ -511,7 +527,10 @@ class Environment:
             raise errors.DockerNotAvailableError(err) from None
 
     def get_container(
-            self, container_name: str, assert_running: bool = False, ignore_not_found: bool = False
+        self,
+        container_name: str,
+        assert_running: bool = False,
+        ignore_not_found: bool = False,
     ):
         """
         Returns created docker container and raises when it's not created.
@@ -524,8 +543,8 @@ class Environment:
         try:
             container = self.docker_client.containers.get(container_name)
             if (
-                    assert_running
-                    and container.status != constants.ContainerStatus.RUNNING
+                assert_running
+                and container.status != constants.ContainerStatus.RUNNING
             ):
                 raise errors.EnvironmentNotRunningError() from None
             return container
@@ -550,18 +569,19 @@ class Environment:
             port=config.port,
             database_engine=config.database_engine,
             environment_vars=environment_vars,
+            extra_mounts=config.extra_mounts,
         )
 
     @classmethod
     def from_source_environment(
-            cls,
-            source_environment: str,
-            project: str,
-            location: str,
-            env_dir_path: pathlib.Path,
-            web_server_port: Optional[int],
-            dags_path: Optional[str],
-            database_engine: str,
+        cls,
+        source_environment: str,
+        project: str,
+        location: str,
+        env_dir_path: pathlib.Path,
+        web_server_port: Optional[int],
+        dags_path: Optional[str],
+        database_engine: str,
     ):
         """
         Create Environment using configuration retrieved from Composer
@@ -570,7 +590,6 @@ class Environment:
         software_config = get_software_config_from_environment(
             project, location, source_environment
         )
-
         pypi_packages = {k: v for k, v in software_config.pypi_packages.items()}
         env_variables = get_env_variables(software_config)
         airflow_overrides = get_airflow_overrides(software_config)
@@ -639,7 +658,7 @@ class Environment:
                     "folders": {},
                     "files": {
                         env_path / "airflow.db": "airflow/airflow.db",
-                    }
+                    },
                 },
                 "env_vars": {},
                 "ports": {},
@@ -647,11 +666,12 @@ class Environment:
             constants.DatabaseEngine.postgresql: {
                 "mounts": {
                     "folders": {
-                        env_path / "postgresql_data": "/var/lib/postgresql/data",
+                        env_path
+                        / "postgresql_data": "/var/lib/postgresql/data",
                     },
                     "files": {
                         env_path / ".keep": "airflow/.keep",
-                    }
+                    },
                 },
                 "env_vars": {
                     "PGDATA": "/var/lib/postgresql/data/pgdata",
@@ -679,9 +699,7 @@ class Environment:
                 exc_info=True,
             )
             if err.status_code == constants.CONFLICT_ERROR_CODE:
-                raise errors.EnvironmentAlreadyRunningError(
-                    self.name
-                ) from None
+                raise errors.EnvironmentAlreadyRunningError(self.name) from None
             raise
 
     def create_docker_container(self):
@@ -693,8 +711,8 @@ class Environment:
         db_extras = self.database_extras
         grouped_db_mounts = db_extras["mounts"]
         db_mounts = {
-            **grouped_db_mounts['files'],
-            **grouped_db_mounts['folders'],
+            **grouped_db_mounts["files"],
+            **grouped_db_mounts["folders"],
         }
         mounts = get_image_mounts(
             self.env_dir_path,
@@ -703,6 +721,7 @@ class Environment:
             utils.resolve_kube_config_path(),
             self.requirements_file,
             db_mounts,
+            self.extra_mounts,
         )
         db_vars = db_extras["env_vars"]
         default_vars = get_default_environment_variables(
@@ -710,8 +729,8 @@ class Environment:
         )
         env_vars = {**default_vars, **self.environment_vars}
         if (
-                platform.system() == "Windows"
-                and env_vars["COMPOSER_CONTAINER_RUN_AS_HOST_USER"] == "True"
+            platform.system() == "Windows"
+            and env_vars["COMPOSER_CONTAINER_RUN_AS_HOST_USER"] == "True"
         ):
             raise Exception(
                 "COMPOSER_CONTAINER_RUN_AS_HOST_USER must be set to `False` on Windows"
@@ -769,8 +788,8 @@ class Environment:
         db_extras = self.database_extras
         grouped_db_mounts = db_extras["mounts"]
         db_mounts = {
-            **grouped_db_mounts['files'],
-            **grouped_db_mounts['folders'],
+            **grouped_db_mounts["files"],
+            **grouped_db_mounts["folders"],
         }
         mounts = get_image_mounts(
             self.env_dir_path,
@@ -799,7 +818,9 @@ class Environment:
             )
             return container
         except docker_errors.APIError as err:
-            error = f"Failed to create container for database with an error: {err}"
+            error = (
+                f"Failed to create container for database with an error: {err}"
+            )
             if is_mount_permission_error(err):
                 error += constants.DOCKER_PERMISSION_ERROR_HINT.format(
                     docs_faq_url=constants.COMPOSER_FAQ_MOUNTING_LINK
@@ -814,7 +835,6 @@ class Environment:
         except docker.errors.APIError as err:
             error = f"Failed to create/get network an error: {err}"
             raise errors.EnvironmentStartError(error)
-
 
     def pull_image(self):
         """Pull Composer docker image."""
@@ -832,15 +852,18 @@ class Environment:
             with console.get_console().status(constants.DB_PULL_IMAGE_MSG):
                 self.docker_client.images.pull(self.db_image_tag)
         except (docker_errors.ImageNotFound, docker_errors.APIError):
-            logging.debug(f"Failed to pull database image ({self.db_image_tag}).", exc_info=True)
+            logging.debug(
+                f"Failed to pull database image ({self.db_image_tag}).",
+                exc_info=True,
+            )
             raise errors.ImageNotFoundError(self.db_image_tag) from None
 
     def create_database_files(self):
         db_extras = self.database_extras
         db_mounts = db_extras["mounts"]
-        for host_path in db_mounts['files'].keys():
+        for host_path in db_mounts["files"].keys():
             files.create_empty_file(host_path, skip_if_exist=False)
-        for host_path in db_mounts['folders'].keys():
+        for host_path in db_mounts["folders"].keys():
             files.create_empty_folder(host_path)
 
     def create(self):
@@ -873,8 +896,8 @@ class Environment:
         """
         status = self.get_container(container_name).status
         if status not in (
-                constants.ContainerStatus.RUNNING,
-                constants.ContainerStatus.CREATED,
+            constants.ContainerStatus.RUNNING,
+            constants.ContainerStatus.CREATED,
         ):
             raise errors.EnvironmentStartError()
 
@@ -882,12 +905,16 @@ class Environment:
         start_time = time.time()
         with console.get_console().status("[bold green]Starting database..."):
             self.assert_container_is_active(self.db_container_name)
-            for line in self.get_container(self.db_container_name).logs(stream=True, timestamps=True):
-                line = line.decode('utf-8').strip()
+            for line in self.get_container(self.db_container_name).logs(
+                stream=True, timestamps=True
+            ):
+                line = line.decode("utf-8").strip()
                 console.get_console().print(line)
                 if "database system is ready to accept connections" in line:
                     start_duration = time.time() - start_time
-                    LOG.info("Database is started in %.2f seconds", start_duration)
+                    LOG.info(
+                        "Database is started in %.2f seconds", start_duration
+                    )
                     return
                 if timeout_occurred(start_time):
                     raise errors.EnvironmentStartTimeoutError()
@@ -901,9 +928,13 @@ class Environment:
         logs. We are using it as marker of the environment readiness.
         """
         start_time = time.time()
-        with console.get_console().status("[bold green]Starting environment..."):
+        with console.get_console().status(
+            "[bold green]Starting environment..."
+        ):
             self.assert_container_is_active(self.container_name)
-            for line in self.get_container(self.container_name).logs(stream=True, timestamps=True):
+            for line in self.get_container(self.container_name).logs(
+                stream=True, timestamps=True
+            ):
                 line = line.decode("utf-8").strip()
                 console.get_console().print(line)
                 # TODO: (b/234684803) Improve detecting container readiness
@@ -925,19 +956,23 @@ class Environment:
         try:
             return self.get_container(container_name)
         except errors.EnvironmentNotRunningError:
-            if container_name == self.container_name:  # if the given container name is the main container
+            if (
+                container_name == self.container_name
+            ):  # if the given container name is the main container
                 return self.create_docker_container()
             else:  # if the given container name is db container
                 return self.create_db_docker_container()
 
-    def start_container(self, container_name: str = None, assert_not_running=True):
+    def start_container(
+        self, container_name: str = None, assert_not_running=True
+    ):
         """
         Start the given container
         """
         container = self.get_or_create_container(container_name)
         if (
-                assert_not_running
-                and container.status == constants.ContainerStatus.RUNNING
+            assert_not_running
+            and container.status == constants.ContainerStatus.RUNNING
         ):
             raise errors.EnvironmentAlreadyRunningError(self.name) from None
         try:
@@ -950,8 +985,8 @@ class Environment:
             )
             # TODO: (b/234552960) Test on different OS/language setting
             if (
-                    err.status_code == constants.SERVER_ERROR_CODE
-                    and "port is already allocated" in str(err)
+                err.status_code == constants.SERVER_ERROR_CODE
+                and "port is already allocated" in str(err)
             ):
                 container.remove()
                 raise errors.ComposerCliError(
@@ -974,7 +1009,11 @@ class Environment:
         files.assert_dag_path_exists(self.dags_path)
 
         self.create_database_files()
-        db_path = self.airflow_db if self.is_database_sqlite3 else self.airflow_db_folder
+        db_path = (
+            self.airflow_db
+            if self.is_database_sqlite3
+            else self.airflow_db_folder
+        )
         files.fix_file_permissions(
             entrypoint=self.entrypoint_file,
             run=self.run_file,
@@ -988,13 +1027,17 @@ class Environment:
         )
 
         if not self.is_database_sqlite3:
-            LOG.info(f"Database engine is selected as {self.database_engine}. The container will start before")
+            LOG.info(
+                f"Database engine is selected as {self.database_engine}. The container will start before"
+            )
             db_container = self.start_container(self.db_container_name, False)
             self.wait_for_db_start()
             self.ensure_container_is_attached_to_network(db_container)
             LOG.info(f"Database started!")
 
-        container = self.start_container(self.container_name, assert_not_running)
+        container = self.start_container(
+            self.container_name, assert_not_running
+        )
         self.ensure_container_is_attached_to_network(container)
         self.wait_for_start()
         self.print_start_message()
@@ -1054,15 +1097,19 @@ class Environment:
         By default container is not removed.
         """
         with console.get_console().status(
-                f"[bold green]Stopping composer local environment..."
+            f"[bold green]Stopping composer local environment..."
         ):
-            db_container = self.get_container(self.db_container_name, ignore_not_found=True)
+            db_container = self.get_container(
+                self.db_container_name, ignore_not_found=True
+            )
             if db_container:
                 db_container.stop()
                 if remove_container:
                     db_container.remove()
 
-            container = self.get_container(self.container_name, ignore_not_found=True)
+            container = self.get_container(
+                self.container_name, ignore_not_found=True
+            )
             if container:
                 container.stop()
                 if remove_container:
@@ -1109,7 +1156,9 @@ class Environment:
         return port from the environment configuration.
         """
         try:
-            return self.get_container(self.container_name).ports["8080/tcp"][0]["HostPort"]
+            return self.get_container(self.container_name).ports["8080/tcp"][0][
+                "HostPort"
+            ]
         except (IndexError, KeyError):
             LOG.info(constants.FAILED_TO_GET_DOCKER_PORT_WARN)
             return self.port
@@ -1123,15 +1172,24 @@ class Environment:
             web_url = ""
         env_status = utils.wrap_status_in_color(env_status)
 
-        return constants.DESCRIBE_ENV_MESSAGE.format(
-            name=self.name,
-            state=env_status,
-            web_url=web_url,
-            image_version=self.image_version,
-            dags_path=self.dags_path,
-            gcloud_path=utils.resolve_gcloud_config_path(),
-        ) + (constants.KUBECONFIG_PATH_MESSAGE.format(kube_config_path=utils.resolve_kube_config_path())
-             if utils.resolve_kube_config_path() else "no file") + constants.FINAL_ENV_MESSAGE
+        return (
+            constants.DESCRIBE_ENV_MESSAGE.format(
+                name=self.name,
+                state=env_status,
+                web_url=web_url,
+                image_version=self.image_version,
+                dags_path=self.dags_path,
+                gcloud_path=utils.resolve_gcloud_config_path(),
+            )
+            + (
+                constants.KUBECONFIG_PATH_MESSAGE.format(
+                    kube_config_path=utils.resolve_kube_config_path()
+                )
+                if utils.resolve_kube_config_path()
+                else "no file"
+            )
+            + constants.FINAL_ENV_MESSAGE
+        )
 
     def describe(self) -> None:
         """Describe the local composer environment."""
@@ -1145,7 +1203,9 @@ class Environment:
             containers.add(self.db_container_name)
 
         for container_name in containers:
-            container = self.get_container(container_name, ignore_not_found=True)
+            container = self.get_container(
+                container_name, ignore_not_found=True
+            )
             if container is not None:
                 if container.status == constants.ContainerStatus.RUNNING:
                     if not force:
