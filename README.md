@@ -2,6 +2,26 @@
 
 [Google Cloud Privacy Notice](https://cloud.google.com/terms/cloud-privacy-notice)
 
+## Forked
+
+This fork was only created to support extra volume mounts specified
+in a configuration file which can be useful for installing local python
+dependencies for development. This can be done by adding the following
+to the created `config.json` file:
+
+```json
+{
+   ...,
+    "database_engine": "sqlite3",
+    "extra_mounts": {
+        "/my/local/path": "target_path"
+    }
+}
+```
+
+which will make the local path available in the container at the `/home/airflow/target_path/`
+directory.
+
 ## Overview
 
 Composer Local Development CLI tool streamlines Apache Airflow DAG development

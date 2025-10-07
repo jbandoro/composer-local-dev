@@ -1167,6 +1167,9 @@ def test_get_image_mounts(mocked_mount):
     sqlite_db_path = path / "airflow.db"
     postgresql_data_path = path / "postgresql_data"
     postgresql_keep_path = path / ".keep"
+    extra_mounts = {
+        pathlib.Path("/extra/source"): "target_path",
+    }
     expected_mounts = [
         mock.call(
             source=str(requirements),
@@ -1207,6 +1210,11 @@ def test_get_image_mounts(mocked_mount):
             type="bind",
         ),
         mock.call(
+            source="/extra/source",
+            target="/home/airflow/target_path",
+            type="bind",
+        ),
+        mock.call(
             source=kubeconfig_path,
             target="/home/airflow/.kube/",
             type="bind",
@@ -1226,6 +1234,7 @@ def test_get_image_mounts(mocked_mount):
             postgresql_data_path: "/var/lib/postgresql/data",
             postgresql_keep_path: "airflow/.keep",
         },
+        extra_mounts,
     )
     assert len(expected_mounts) == len(actual_mounts)
     mocked_mount.assert_has_calls(expected_mounts)

@@ -51,6 +51,7 @@ def get_image_mounts(
     kube_config_path: Optional[str],
     requirements: pathlib.Path,
     database_mounts: Dict[pathlib.Path, str],
+    extra_mounts: Optional[Dict[pathlib.Path, str]],
 ) -> List[docker.types.Mount]:
     """
     Return list of docker volumes to be mounted inside container.
@@ -69,6 +70,7 @@ def get_image_mounts(
         env_path / "data": "gcs/data/",
         gcloud_config_path: ".config/gcloud",
         **database_mounts,
+        **extra_mounts,
     }
     # Add kube_config_path only if it's provided
     if kube_config_path:
@@ -362,6 +364,7 @@ class EnvironmentConfig:
             else self.parse_int_param("port", allowed_range=(0, 65536))
         )
         self.database_engine = self.get_str_param("database_engine")
+        self.extra_mounts = self.config.get("extra_mounts", dict())
 
     def load_configuration_from_file(self) -> Dict:
         """
@@ -441,6 +444,7 @@ class Environment:
         port: Optional[int] = None,
         pypi_packages: Optional[Dict] = None,
         environment_vars: Optional[Dict] = None,
+        extra_mounts: Optional[Dict] = None,
     ):
         self.name = env_dir_path.name
         self.container_name = f"{constants.CONTAINER_NAME}-{self.name}"
@@ -473,6 +477,7 @@ class Environment:
             environment_vars if environment_vars is not None else dict()
         )
         self.docker_client = self.get_client()
+        self.extra_mounts = extra_mounts if extra_mounts is not None else dict()
 
     def get_client(self):
         try:
@@ -538,6 +543,7 @@ class Environment:
             port=config.port,
             database_engine=config.database_engine,
             environment_vars=environment_vars,
+            extra_mounts=config.extra_mounts,
         )
 
     @classmethod
@@ -731,6 +737,7 @@ class Environment:
             utils.resolve_kube_config_path(),
             self.requirements_file,
             db_mounts,
+            self.extra_mounts,
         )
         db_vars = db_extras["env_vars"]
         default_vars = self.get_default_environment_variables(db_vars)
